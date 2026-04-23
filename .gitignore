@@ -1,0 +1,10 @@
+# Ignore environment variables
+.env
+
+# Ignore folder containing dependencies
+node_modules/
+venv/
+
+# Ignore OS-generated files
+.DS_Store
+Thumbs.db

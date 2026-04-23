@@ -1,320 +1,7 @@
-# import os
-# import json
-# import pdfplumber
-# from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-# from langchain_chroma import Chroma
-# from langchain_core.documents import Document
-# from langchain_core.tools import tool
-# from langchain_text_splitters import RecursiveCharacterTextSplitter
-# from langgraph.prebuilt import create_react_agent
-# from langgraph.checkpoint.memory import MemorySaver
-# from dotenv import load_dotenv
-# load_dotenv()
-# # ── 1. Embeddings + Vector Store ───────────────────────────────────────────
-# embeddings = OpenAIEmbeddings(
-#     model="text-embedding-3-small",
-#     openai_api_key=os.getenv("OPENAI_API_KEY")
-# )
-
-# vector_store = Chroma(
-#     collection_name="banking-app",
-#     embedding_function=embeddings,
-#     persist_directory="./chroma_db_new"
-# )
-
-
-# # ── 2. Helper Functions (MUST be defined before use) ──────────────────────
-# def clamp_bbox(bbox, page_bbox):
-#     print(f"[clamp_bbox] Clamping bbox {bbox} within page_bbox {page_bbox}")
-#     x0, top, x1, bottom = bbox
-#     px0, ptop, px1, pbottom = page_bbox
-#     result = (
-#         max(x0, px0),
-#         max(top, ptop),
-#         min(x1, px1),
-#         min(bottom, pbottom)
-#     )
-#     print(f"[clamp_bbox] Result: {result}")
-#     return result
-
-
-
-# def table_to_text(headers: list, rows: list[dict]) -> str:
-#     print(f"[table_to_text] Converting table with {len(headers)} headers and {len(rows)} rows")
-#     lines = ["Table columns: " + ", ".join(headers)]
-#     for row in rows:
-#         lines.append(" | ".join(f"{k}: {v}" for k, v in row.items() if v))
-#     result = "\n".join(lines)
-#     print(f"[table_to_text] Generated {len(lines)} lines of text")
-#     return result
-
-
-
-
-
-# def get_bank_name(filename: str) -> str:
-#     print(f"[get_bank_name] Processing filename: {filename}")
-#     name_map = {
-#         "SOC":  "State Bank of Pakistan (SBP)",
-#         # "SOBC": "Bank of China (SOBC)",
-#         "UBL":  "United Bank Limited (UBL)",
-#         "HBL":  "Habib Bank Limited (HBL)",
-#         "MCB":  "MCB Bank",
-#         "ABL":  "Allied Bank Limited (ABL)",
-#         "NBP":  "National Bank of Pakistan (NBP)",
-#     }
-#     filename_upper = filename.upper()
-#     for key, full_name in name_map.items():
-#         if key in filename_upper:
-#             print(f"[get_bank_name] Matched '{key}' -> {full_name}")
-#             return full_name
-#     fallback = filename.replace(".pdf", "")  # fallback
-#     print(f"[get_bank_name] No match found, using fallback: {fallback}")
-#     return fallback
-
-
-
-# def extract_docs_from_pdf(pdf_path: str) -> list[Document]:
-#     print(f"[extract_docs_from_pdf] Starting extraction from: {pdf_path}")
-#     docs = []
-#     filename = os.path.basename(pdf_path)
-#     print(f"[extract_docs_from_pdf] Filename: {filename}")
-#     bank_name = get_bank_name(filename)
-#     print(f"[extract_docs_from_pdf] Bank name identified: {bank_name}")
-
-#     with pdfplumber.open(pdf_path) as pdf:
-#         print(f"[extract_docs_from_pdf] PDF opened. Total pages: {len(pdf.pages)}")
-#         for page_num, page in enumerate(pdf.pages, start=1):
-#             print(f"[extract_docs_from_pdf] Processing page {page_num}")
-#             tables       = page.find_tables()
-#             table_bboxes = [t.bbox for t in tables]
-#             print(f"[extract_docs_from_pdf] Found {len(tables)} tables on page {page_num}")
-
-#             # ── Text (excluding table regions) ──
-#             text_page = page
-#             for bbox in table_bboxes:
-#                 clamped = clamp_bbox(bbox, page.bbox)
-#                 try:
-#                     text_page = text_page.outside_bbox(clamped)
-#                 except ValueError:
-#                     pass
-
-#             raw_text = text_page.extract_text()
-#             if raw_text and raw_text.strip():
-#                 print(f"[extract_docs_from_pdf] Page {page_num}: Added text document ({len(raw_text)} chars)")
-#                 docs.append(Document(
-#                     page_content=raw_text.strip(),
-#                     metadata={
-#                         "source":    filename,
-#                         "bank_name": bank_name,
-#                         "page":      page_num,
-#                         "type":      "text"
-#                     }
-#                 ))
-
-#             # ── Tables ──
-#             for tbl_idx, table in enumerate(tables):
-#                 rows = table.extract()
-#                 if not rows or len(rows) < 2:
-#                     print(f"[extract_docs_from_pdf] Page {page_num}, Table {tbl_idx}: Skipped (insufficient rows)")
-#                     continue
-#                 print(f"[extract_docs_from_pdf] Page {page_num}, Table {tbl_idx}: Processing {len(rows)} rows")
-
-#                 raw_headers = rows[0]
-#                 headers = [
-#                     (str(h).strip() if h and str(h).strip() else f"col_{i}")
-#                     for i, h in enumerate(raw_headers)
-#                 ]
-#                 structured_rows = []
-#                 for row in rows[1:]:
-#                     record = {
-#                         headers[i] if i < len(headers) else f"col_{i}":
-#                         (str(cell).strip() if cell else "")
-#                         for i, cell in enumerate(row)
-#                     }
-#                     structured_rows.append(record)
-
-#                 print(f"[extract_docs_from_pdf] Page {page_num}, Table {tbl_idx}: Added table document with {len(headers)} headers")
-#                 docs.append(Document(
-#                     page_content=table_to_text(headers, structured_rows),
-#                     metadata={
-#                         "source":      filename,
-#                         "bank_name":   bank_name,
-#                         "page":        page_num,
-#                         "type":        "table",
-#                         "table_index": tbl_idx,
-#                         "headers":     json.dumps(headers),
-#                         "raw_json":    json.dumps(structured_rows)
-#                     }
-#                 ))
-#     print(f"[extract_docs_from_pdf] Extraction complete. Total documents: {len(docs)}")
-#     return docs
-
-
-# def setup_vector_store():
-#     print("[setup_vector_store] Starting vector store setup...")
-#     # ── 3. Load all PDFs ───────────────────────────────────────────────────────
-#     all_docs = []
-#     print("[setup_vector_store] Scanning banks-data/ directory...")
-#     for filename in os.listdir("banks-data/"):
-#         if filename.endswith(".pdf"):
-#             path = os.path.join("banks-data/", filename)
-#             print(f"[setup_vector_store] Processing: {filename}")
-#             extracted = extract_docs_from_pdf(path)
-#             print(f"[setup_vector_store]  → {len(extracted)} chunks (text + tables)")
-#             all_docs.extend(extracted)
-
-#     print(f"[setup_vector_store] Total chunks extracted: {len(all_docs)}")
-
-
-
-#     # ── 4. Split text chunks only (tables stay intact) ────────────────────────
-#     print(f"[setup_vector_store] Initializing text splitter...")
-#     text_splitter = RecursiveCharacterTextSplitter(
-#         chunk_size=1000,
-#         chunk_overlap=200,
-#         add_start_index=True,
-#     )
-
-#     final_chunks = []
-#     for doc in all_docs:
-#         if doc.metadata.get("type") == "table":
-#             final_chunks.append(doc)
-#         else:
-#             final_chunks.extend(text_splitter.split_documents([doc]))
-
-#     print(f"[setup_vector_store] Final chunks after splitting: {len(final_chunks)}")
-
-
-
-
-#     # ── 5. Ingest into ChromaDB in batches ────────────────────────────────────
-#     print(f"[setup_vector_store] Starting batch ingestion into ChromaDB...")
-#     BATCH_SIZE = 500
-#     document_ids = []
-
-#     for i in range(0, len(final_chunks), BATCH_SIZE):
-#         batch = final_chunks[i:i + BATCH_SIZE]
-#         ids = vector_store.add_documents(documents=batch)
-#         document_ids.extend(ids)
-#         print(f"[setup_vector_store] Inserted batch {i // BATCH_SIZE + 1} ({len(batch)} chunks)")
-
-#     print(f"[setup_vector_store] Total inserted: {len(document_ids)} chunks")
-#     print(f"[setup_vector_store] Vector store setup complete!")
-
-#     return vector_store
-
-
-
-# # ── 6. RAG Tool ───────────────────────────────────────────────────────────
-# @tool(response_format="content_and_artifact")
-# def retrieve_context(query: str):
-#     """Retrieve relevant banking information including tables and text."""
-#     print(f"[retrieve_context] Query received: '{query}'")
-#     print(f"[retrieve_context] Searching vector store for 8 similar documents...")
-#     retrieved_docs = vector_store.similarity_search(query, k=8)
-#     print(f"[retrieve_context] Retrieved {len(retrieved_docs)} documents")
-#     parts = []
-#     for idx, doc in enumerate(retrieved_docs):
-#         meta = doc.metadata
-#         bank_name = meta.get("bank_name", meta.get("source", "Unknown Bank"))
-#         print(f"[retrieve_context] Doc {idx + 1}: Type={meta.get('type')}, Bank={bank_name}, Page={meta.get('page')}")
-
-#         if meta.get("type") == "table":
-#             try:
-#                 headers = json.loads(meta.get("headers", "[]"))
-#                 table_str  = f"[SOURCE]\nBank: {bank_name}\nFile: {meta['source']}\nPage: {meta['page']}\n\n"
-#                 table_str += f"Columns: {', '.join(headers)}\n"
-#                 table_str += doc.page_content
-#             except Exception as e:
-#                 print(f"[retrieve_context] Error parsing table headers: {e}")
-#                 table_str = doc.page_content
-#             parts.append(table_str)
-#         else:
-#             parts.append(
-#                 f"[TEXT] Bank: {bank_name} | Page {meta.get('page')}\n"
-#                 f"{doc.page_content}"
-#             )
-
-#     print(f"[retrieve_context] Formatted {len(parts)} document parts for response")
-#     return "\n\n---\n\n".join(parts), retrieved_docs
-
-
-# def answer_query():
-#     print("[answer_query] Initializing LLM agent...")
-#     # ── 7. LLM + Agent ────────────────────────────────────────────────────────
-#     print("[answer_query] Creating ChatOpenAI model (gpt-4o-mini)...")
-#     model = ChatOpenAI(
-#         model="gpt-4o-mini",
-#         temperature=0,
-#         openai_api_key=os.getenv("OPENAI_API_KEY")
-#     )
-#     print("[answer_query] Model created successfully")
-
-#     tools = [retrieve_context]
-#     print(f"[answer_query] Registered {len(tools)} tool(s)")
-
-#     system_prompt = """You are a car buying assistant using the data with access to Pakistani banking documents.
-# Always Check before saying that this queries relevant data don't actually exists in db.
-# STRICT RULES (MANDATORY):
-# - Every numerical value MUST include citation.
-# - Citation format MUST be exactly:
-#   (Bank: <bank_name>, Page: <page>, Source: <filename>)
-
-
-# - NEVER write any number without citation.
-# - If multiple banks are compared, EACH row must include citation.
-
-# - DO NOT summarize without attribution.
-
-# When answering:
-# 1. Always use the 'retrieve_context' tool first.
-# 2. ALWAYS refer to banks by their REAL name from the metadata (bank_name field), never as "Bank A" or "Bank B".
-# 3. Compare multiple banks in every response.
-# 4. Cite the source document, bank name, and page number for every claim.
-# 5. Use tables from retrieved data for interest rates and fees.
-
-# NO RESPONSE EXCEPT FOR THE QUERIES RELATED TO THE BANKING NO OTHER QUERIES SHOULD BE ENTERTAINED AND ALSO MAKE SURE THAT YOU ONLY USE THE VECTOR DATABASE TO RESPOND.
-# NO SELF MADE RESPONSE ONLY RESPONSE FROM THE VECTOR DATABASE WITH ITS META DATA SHOULD BE MENTIONED.
-# YOU ARE ENGLISH AGENT AND ALL THE RELEVANT QUERIES SHOULD BE ENTERTAINED NO SELF MADE INFORMATION.
-
-# Use the following mapping to identify banks from filenames:
-#         "SOC":  "State Bank of Pakistan (SBP)",
-
-#         "UBL":  "United Bank Limited (UBL)",
-#         "HBL":  "Habib Bank Limited (HBL)",
-#         "MCB":  "MCB Bank",
-#         "ABL":  "Allied Bank Limited (ABL)",
-#         "NBP":  "National Bank of Pakistan (NBP)", 
-# """
-
-#     print("[answer_query] Creating ReAct agent with system prompt...")
-#     agent = create_react_agent(
-#         model,
-#         tools,
-#         prompt=system_prompt,
-#         checkpointer=MemorySaver()
-#     )
-#     print("[answer_query] Agent created successfully")
-#     return agent
-
-# def run_agent(agent, messages):
-#     print(f"[run_agent] Running agent with {len(messages)} message(s)")
-#     print(f"[run_agent] Invoking agent...")
-#     response = agent.invoke(
-#         {"messages": messages},
-#         {"configurable": {"thread_id": "session-1"}}
-#     )
-#     print(f"[run_agent] Agent response received with {len(response['messages'])} message(s)")
-#     final_content = response["messages"][-1].content
-#     print(f"[run_agent] Response length: {len(final_content)} characters")
-#     print(f"[run_agent] Returning final response")
-#     return final_content
-
-
-
 import os
 import json
+import uuid
+import tempfile
 import pdfplumber
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
@@ -327,22 +14,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── 1. Embeddings ─────────────────────────────────────────────────────────────
+# ── Embeddings (shared) ───────────────────────────────────────────────────────
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-small",
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# ── 2. Helper Functions ───────────────────────────────────────────────────────
+# ── Module-level store references ─────────────────────────────────────────────
+_bank_vector_store:   Chroma | None = None
+_upload_vector_store: Chroma | None = None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — Shared PDF extraction helpers
+# ═════════════════════════════════════════════════════════════════════════════
+
 def clamp_bbox(bbox, page_bbox):
     x0, top, x1, bottom = bbox
     px0, ptop, px1, pbottom = page_bbox
-    return (
-        max(x0, px0),
-        max(top, ptop),
-        min(x1, px1),
-        min(bottom, pbottom)
-    )
+    return (max(x0, px0), max(top, ptop), min(x1, px1), min(bottom, pbottom))
 
 
 def table_to_text(headers: list, rows: list[dict]) -> str:
@@ -361,31 +51,29 @@ def get_bank_name(filename: str) -> str:
         "ABL": "Allied Bank Limited (ABL)",
         "NBP": "National Bank of Pakistan (NBP)",
     }
-    filename_upper = filename.upper()
     for key, full_name in name_map.items():
-        if key in filename_upper:
+        if key in filename.upper():
             return full_name
     return filename.replace(".pdf", "")
 
 
-def extract_docs_from_pdf(pdf_path: str) -> list[Document]:
-    print(f"[extract_docs_from_pdf] Extracting: {pdf_path}")
+def extract_docs_from_pdf(pdf_path: str, source_label: str | None = None) -> list[Document]:
+    """Extract text + table chunks from a PDF. source_label overrides metadata."""
     docs = []
-    filename = os.path.basename(pdf_path)
-    bank_name = get_bank_name(filename)
+    filename  = os.path.basename(pdf_path)
+    label     = source_label or filename
+    bank_name = get_bank_name(filename) if not source_label else label
 
+    print(f"[extract_docs] '{label}'...")
     with pdfplumber.open(pdf_path) as pdf:
-        print(f"  → {len(pdf.pages)} pages")
         for page_num, page in enumerate(pdf.pages, start=1):
-            tables = page.find_tables()
+            tables       = page.find_tables()
             table_bboxes = [t.bbox for t in tables]
 
-            # Text (excluding table regions)
             text_page = page
             for bbox in table_bboxes:
-                clamped = clamp_bbox(bbox, page.bbox)
                 try:
-                    text_page = text_page.outside_bbox(clamped)
+                    text_page = text_page.outside_bbox(clamp_bbox(bbox, page.bbox))
                 except ValueError:
                     pass
 
@@ -393,221 +81,277 @@ def extract_docs_from_pdf(pdf_path: str) -> list[Document]:
             if raw_text and raw_text.strip():
                 docs.append(Document(
                     page_content=raw_text.strip(),
-                    metadata={
-                        "source": filename,
-                        "bank_name": bank_name,
-                        "page": page_num,
-                        "type": "text"
-                    }
+                    metadata={"source": label, "bank_name": bank_name,
+                              "page": page_num, "type": "text"}
                 ))
 
-            # Tables
             for tbl_idx, table in enumerate(tables):
                 rows = table.extract()
                 if not rows or len(rows) < 2:
                     continue
-
-                raw_headers = rows[0]
                 headers = [
                     (str(h).strip() if h and str(h).strip() else f"col_{i}")
-                    for i, h in enumerate(raw_headers)
+                    for i, h in enumerate(rows[0])
                 ]
                 structured_rows = [
-                    {
-                        headers[i] if i < len(headers) else f"col_{i}":
-                        (str(cell).strip() if cell else "")
-                        for i, cell in enumerate(row)
-                    }
+                    {headers[i] if i < len(headers) else f"col_{i}":
+                     (str(cell).strip() if cell else "")
+                     for i, cell in enumerate(row)}
                     for row in rows[1:]
                 ]
-
                 docs.append(Document(
                     page_content=table_to_text(headers, structured_rows),
                     metadata={
-                        "source": filename,
-                        "bank_name": bank_name,
-                        "page": page_num,
-                        "type": "table",
+                        "source": label, "bank_name": bank_name,
+                        "page": page_num, "type": "table",
                         "table_index": tbl_idx,
                         "headers": json.dumps(headers),
                         "raw_json": json.dumps(structured_rows)
                     }
                 ))
 
-    print(f"  → {len(docs)} chunks extracted")
+    print(f"[extract_docs] → {len(docs)} chunks")
     return docs
 
 
-def _is_vector_store_populated(vs: Chroma) -> bool:
-    """Check if the ChromaDB collection already has documents."""
-    try:
-        count = vs._collection.count()
-        print(f"[vector_store] Collection has {count} documents")
-        return count > 0
-    except Exception as e:
-        print(f"[vector_store] Could not check count: {e}")
-        return False
+def _split_and_ingest(vs: Chroma, docs: list[Document]) -> int:
+    """Split text docs, keep tables intact, bulk-ingest into Chroma."""
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    final = []
+    for doc in docs:
+        if doc.metadata.get("type") == "table":
+            final.append(doc)
+        else:
+            final.extend(splitter.split_documents([doc]))
+
+    BATCH = 500
+    for i in range(0, len(final), BATCH):
+        vs.add_documents(documents=final[i:i + BATCH])
+    return len(final)
 
 
-def setup_vector_store() -> Chroma:
-    """
-    Initialize ChromaDB. If it's already populated (persisted from a prior run),
-    skip re-ingestion. Otherwise ingest all PDFs from banks-data/.
-    """
-    print("[setup_vector_store] Initializing vector store...")
+def _format_docs(docs: list[Document]) -> str:
+    if not docs:
+        return "No relevant content found."
+    parts = []
+    for doc in docs:
+        meta = doc.metadata
+        src  = meta.get("bank_name", meta.get("source", "Unknown"))
+        if meta.get("type") == "table":
+            try:
+                hdrs = json.loads(meta.get("headers", "[]"))
+                text = (f"[TABLE] Source: {src} | Page: {meta['page']}\n"
+                        f"Columns: {', '.join(hdrs)}\n{doc.page_content}")
+            except Exception:
+                text = doc.page_content
+        else:
+            text = f"[TEXT] Source: {src} | Page {meta.get('page')}\n{doc.page_content}"
+        parts.append(text)
+    return "\n\n---\n\n".join(parts)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — Bank vector store (persistent)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _get_bank_vector_store() -> Chroma:
+    global _bank_vector_store
+    if _bank_vector_store is not None:
+        return _bank_vector_store
+
+    print("[bank_vs] Initialising...")
     vs = Chroma(
         collection_name="banking-app",
         embedding_function=embeddings,
         persist_directory="./chroma_db_new"
     )
 
-    if _is_vector_store_populated(vs):
-        print("[setup_vector_store] Vector store already populated — skipping ingestion.")
+    try:
+        count = vs._collection.count()
+    except Exception:
+        count = 0
+
+    if count > 0:
+        print(f"[bank_vs] Already populated ({count} docs). Skipping ingestion.")
+        _bank_vector_store = vs
         return vs
 
-    print("[setup_vector_store] Vector store is empty — ingesting PDFs...")
     banks_dir = "banks-data/"
-
     if not os.path.isdir(banks_dir):
-        print(f"[setup_vector_store] WARNING: '{banks_dir}' directory not found. "
-              "Create it and add PDF files.")
-        return vs
-
-    pdf_files = [f for f in os.listdir(banks_dir) if f.endswith(".pdf")]
-    if not pdf_files:
-        print(f"[setup_vector_store] WARNING: No PDF files found in '{banks_dir}'.")
+        print(f"[bank_vs] WARNING: '{banks_dir}' not found.")
+        _bank_vector_store = vs
         return vs
 
     all_docs = []
-    for filename in pdf_files:
-        path = os.path.join(banks_dir, filename)
-        extracted = extract_docs_from_pdf(path)
-        all_docs.extend(extracted)
+    for fname in os.listdir(banks_dir):
+        if fname.endswith(".pdf"):
+            all_docs.extend(extract_docs_from_pdf(os.path.join(banks_dir, fname)))
 
-    print(f"[setup_vector_store] Total raw chunks: {len(all_docs)}")
+    if all_docs:
+        n = _split_and_ingest(vs, all_docs)
+        print(f"[bank_vs] Ingested {n} chunks.")
+    else:
+        print(f"[bank_vs] No PDFs found in '{banks_dir}'.")
 
-    # Split text chunks; keep table chunks intact
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        add_start_index=True,
-    )
-
-    final_chunks = []
-    for doc in all_docs:
-        if doc.metadata.get("type") == "table":
-            final_chunks.append(doc)
-        else:
-            final_chunks.extend(splitter.split_documents([doc]))
-
-    print(f"[setup_vector_store] Final chunks after splitting: {len(final_chunks)}")
-
-    BATCH_SIZE = 500
-    for i in range(0, len(final_chunks), BATCH_SIZE):
-        batch = final_chunks[i:i + BATCH_SIZE]
-        vs.add_documents(documents=batch)
-        print(f"[setup_vector_store] Inserted batch {i // BATCH_SIZE + 1} ({len(batch)} chunks)")
-
-    print("[setup_vector_store] Ingestion complete!")
+    _bank_vector_store = vs
     return vs
 
 
-# ── 3. Initialize vector store at module load time ───────────────────────────
-# This runs once when the module is first imported (i.e. app startup).
-print("[agent.py] Setting up vector store on startup...")
-vector_store = setup_vector_store()
-print("[agent.py] Vector store ready.")
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — Upload vector store (ephemeral, in-memory)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def ingest_uploaded_pdf(pdf_bytes: bytes, filename: str) -> int:
+    """
+    Called by app.py when the user uploads a PDF.
+    Builds an in-memory Chroma collection from the file.
+    Returns number of chunks created.
+    """
+    global _upload_vector_store
+
+    print(f"[upload_vs] Ingesting '{filename}'...")
+
+    # Write to temp file so pdfplumber can open it
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+
+    try:
+        docs = extract_docs_from_pdf(tmp_path, source_label=filename)
+    finally:
+        os.unlink(tmp_path)
+
+    # Fresh in-memory collection (unique name avoids stale data)
+    vs = Chroma(
+        collection_name=f"upload-{uuid.uuid4().hex[:8]}",
+        embedding_function=embeddings,
+        # No persist_directory → ephemeral / in-memory
+    )
+    n = _split_and_ingest(vs, docs)
+    _upload_vector_store = vs
+    print(f"[upload_vs] Ready — {n} chunks.")
+    return n
 
 
-# ── 4. RAG Tool ───────────────────────────────────────────────────────────────
+def clear_upload_vector_store():
+    """Call this when the user removes/replaces their uploaded PDF."""
+    global _upload_vector_store
+    if _upload_vector_store is not None:
+        try:
+            _upload_vector_store.delete_collection()
+        except Exception:
+            pass
+        _upload_vector_store = None
+    print("[upload_vs] Cleared.")
+
+
+def has_uploaded_pdf() -> bool:
+    return _upload_vector_store is not None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — RAG tools
+# ═════════════════════════════════════════════════════════════════════════════
+
 @tool(response_format="content_and_artifact")
-def retrieve_context(query: str):
-    """Retrieve relevant banking information including tables and text."""
-    print(f"[retrieve_context] Query: '{query}'")
-    retrieved_docs = vector_store.similarity_search(query, k=8)
-    print(f"[retrieve_context] Retrieved {len(retrieved_docs)} documents")
-
-    if not retrieved_docs:
-        return "No relevant documents found in the database.", []
-
-    parts = []
-    for idx, doc in enumerate(retrieved_docs):
-        meta = doc.metadata
-        bank_name = meta.get("bank_name", meta.get("source", "Unknown Bank"))
-
-        if meta.get("type") == "table":
-            try:
-                headers = json.loads(meta.get("headers", "[]"))
-                text = (
-                    f"[TABLE] Bank: {bank_name} | File: {meta['source']} | Page: {meta['page']}\n"
-                    f"Columns: {', '.join(headers)}\n"
-                    f"{doc.page_content}"
-                )
-            except Exception:
-                text = doc.page_content
-            parts.append(text)
-        else:
-            parts.append(
-                f"[TEXT] Bank: {bank_name} | Page {meta.get('page')}\n"
-                f"{doc.page_content}"
-            )
-
-    return "\n\n---\n\n".join(parts), retrieved_docs
+def retrieve_bank_context(query: str):
+    """Retrieve relevant information from the pre-loaded Pakistani bank documents."""
+    print(f"[tool:bank] '{query}'")
+    vs   = _get_bank_vector_store()
+    docs = vs.similarity_search(query, k=8)
+    print(f"[tool:bank] → {len(docs)} docs")
+    return _format_docs(docs), docs
 
 
-# ── 5. Agent Factory ──────────────────────────────────────────────────────────
-def answer_query():
-    print("[answer_query] Creating agent...")
+@tool(response_format="content_and_artifact")
+def retrieve_uploaded_pdf_context(query: str):
+    """Retrieve relevant information from the user's uploaded PDF document."""
+    print(f"[tool:upload] '{query}'")
+    if _upload_vector_store is None:
+        return "No uploaded PDF is available.", []
+    docs = _upload_vector_store.similarity_search(query, k=8)
+    print(f"[tool:upload] → {len(docs)} docs")
+    return _format_docs(docs), docs
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — Agent factory
+# ═════════════════════════════════════════════════════════════════════════════
+
+_BANK_SYSTEM_PROMPT = """You are a car-buying and banking assistant with access to Pakistani banking documents.
+
+STRICT RULES:
+- Always call 'retrieve_bank_context' before answering.
+- Every numerical value MUST have a citation: (Bank: <name>, Page: <n>, Source: <file>)
+- NEVER invent data — use ONLY what the tool returns.
+- Refer to banks by their full real name from metadata, never as "Bank A" etc.
+- Compare multiple banks whenever possible.
+- Only answer banking-related queries. Politely decline everything else.
+- Respond in English only.
+
+Bank name mapping (from filenames):
+  SOC → State Bank of Pakistan (SBP)
+  UBL → United Bank Limited (UBL)
+  HBL → Habib Bank Limited (HBL)
+  MCB → MCB Bank
+  ABL → Allied Bank Limited (ABL)
+  NBP → National Bank of Pakistan (NBP)
+"""
+
+_UPLOAD_SYSTEM_PROMPT = """You are a helpful general-purpose assistant. The user has uploaded a PDF document and wants to discuss its contents.
+
+RULES:
+- Always call 'retrieve_uploaded_pdf_context' first to find relevant passages.
+- Base every answer ONLY on what is retrieved — do not guess or add outside knowledge.
+- Cite the page number for every factual claim: (Page: <n>)
+- If the PDF does not contain the answer, say so clearly.
+- You may answer any question the user has about the document.
+- Respond in English.
+"""
+
+
+def answer_query(use_uploaded_pdf: bool = False):
+    """
+    Returns a LangGraph ReAct agent.
+
+    use_uploaded_pdf=False (default)
+        → Banking specialist that queries the pre-loaded bank vector store.
+    use_uploaded_pdf=True
+        → General assistant that queries the user's uploaded PDF.
+    """
+    mode = "UPLOAD-PDF" if use_uploaded_pdf else "BANK-RAG"
+    print(f"[answer_query] Creating agent — mode: {mode}")
+
     model = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0,
         openai_api_key=os.getenv("OPENAI_API_KEY")
     )
 
-    system_prompt = """You are a car buying assistant with access to Pakistani banking documents.
-Always check the vector database before saying data doesn't exist.
-
-STRICT RULES (MANDATORY):
-- Every numerical value MUST include a citation.
-- Citation format: (Bank: <bank_name>, Page: <page>, Source: <filename>)
-- NEVER write any number without citation.
-- If multiple banks are compared, EACH row must include citation.
-- DO NOT summarize without attribution.
-
-When answering:
-1. Always use the 'retrieve_context' tool first.
-2. ALWAYS refer to banks by their REAL name from the metadata (bank_name field).
-3. Compare multiple banks in every response when possible.
-4. Cite source document, bank name, and page number for every claim.
-5. Use tables from retrieved data for interest rates and fees.
-
-Only answer queries related to banking. For unrelated queries, politely decline.
-Use ONLY information from the vector database — no self-made responses.
-All responses must be in English.
-
-Bank name mapping from filenames:
-  SOC  → State Bank of Pakistan (SBP)
-  UBL  → United Bank Limited (UBL)
-  HBL  → Habib Bank Limited (HBL)
-  MCB  → MCB Bank
-  ABL  → Allied Bank Limited (ABL)
-  NBP  → National Bank of Pakistan (NBP)
-"""
+    if use_uploaded_pdf:
+        tools, system_prompt = [retrieve_uploaded_pdf_context], _UPLOAD_SYSTEM_PROMPT
+    else:
+        tools, system_prompt = [retrieve_bank_context], _BANK_SYSTEM_PROMPT
 
     agent = create_react_agent(
         model,
-        [retrieve_context],
+        tools,
         prompt=system_prompt,
         checkpointer=MemorySaver()
     )
-    print("[answer_query] Agent ready.")
+    print(f"[answer_query] Agent ({mode}) ready.")
     return agent
 
 
 def run_agent(agent, messages):
-    print(f"[run_agent] Invoking agent with {len(messages)} message(s)...")
     response = agent.invoke(
         {"messages": messages},
         {"configurable": {"thread_id": "session-1"}}
     )
     return response["messages"][-1].content
+
+
+# ── Pre-warm bank store at import time ────────────────────────────────────────
+print("[agent.py] Pre-warming bank vector store...")
+_get_bank_vector_store()
+print("[agent.py] Startup complete.")

@@ -11,7 +11,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from dotenv import load_dotenv
-
+import streamlit as st
+os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 load_dotenv()
 
 # ── Embeddings (shared) ───────────────────────────────────────────────────────

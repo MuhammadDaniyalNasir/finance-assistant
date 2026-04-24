@@ -42,7 +42,7 @@ A dual-mode AI-powered document assistant built with **Streamlit**, **LangGraph*
 
 1. **Clone/navigate to the project:**
    ```bash
-   cd /home/danix/Desktop/banking-app
+   cd banking-app
    ```
 
 2. **Create a virtual environment:**
@@ -60,11 +60,6 @@ A dual-mode AI-powered document assistant built with **Streamlit**, **LangGraph*
    ```
    OPENAI_API_KEY=your_api_key_here
    ```
-
-5. **Prepare banking PDFs** (optional):
-   - Place PDF files in a `banks-data/` directory
-   - Filenames should include bank codes: `SOC`, `UBL`, `HBL`, `MCB`, `ABL`, `NBP`
-   - Example: `UBL_car_finance.pdf`, `HBL_products_2024.pdf`
 
 ---
 
